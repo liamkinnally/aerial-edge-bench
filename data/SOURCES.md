@@ -20,3 +20,14 @@ The download is the creator's web preview, not the full-resolution original. Use
 - Local file: `models/yolo26n.pt` (ignored by Git)
 - SHA-256: `9b09cc8bf347f0fc8a5f7657480587f25db09b34bf33b0652110fb03a8ad4fef`
 - Licensing: https://www.ultralytics.com/license
+
+# Training dataset
+
+- Dataset: VisDrone2019-DET, AISKYEYE team at Tianjin University
+- Original project: https://github.com/VisDrone/VisDrone-Dataset
+- Dataset configuration/conversion: the unmodified `VisDrone.yaml` bundled with the pinned Ultralytics release
+- Archive mirror: `https://github.com/ultralytics/assets/releases/download/v0.0.0/`, using `VisDrone2019-DET-train.zip`, `VisDrone2019-DET-val.zip`, and `VisDrone2019-DET-test-dev.zip`
+- Local root: `datasets/VisDrone/` (ignored by Git)
+- Download sizes, archive checksums, CRC verification, extracted size, and split counts: `results/phase1-setup/dataset-manifest.json`
+
+The upstream project provides a research dataset; its linked README does not include a standalone license grant. This repository does not redistribute the images, annotations, or archives. The CC0 description above applies only to the separate ConnectHV demo clip.
