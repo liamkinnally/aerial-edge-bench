@@ -1,0 +1,9 @@
+[project]
+name = "aerial-edge-bench"
+version = "0.1.0"
+description = "Aerial object detection and CPU deployment experiments"
+requires-python = ">=3.12,<3.13"
+dependencies = ["ultralytics==8.4.209"]
+
+[tool.uv]
+package = false
