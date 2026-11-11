@@ -10,7 +10,7 @@ first 10 epochs were cheap test for pipeline. separate 50 epochs after first 10 
 
 PyTorch time changed from 16.7ms to 22.9ms on the Apple M4 Pro CPU. the first measurement used 384 x 640 pixels and the later measurement used 640 x 640 pixels. the input size was one difference. the weights and the measurement wrapper also changed, so I can't say how much each contributed. rows of the same size use identical input shapes, which makes the comparison between formats fair.
 
-the training run used `nms=None`, which selects the detection branch that needs external NMS, and validation saved that mode in the checkpoint (`end2end=False`). exports and benchmarks kept that mode, so these results include NMS and don't test YOLO26's NMS-free mode (`nms=False`).
+My results use the mode with the extra cleanup step, because that's what training defaulted to. I didn't test the NMS-free mode, which might be faster.
 
 shrinking in INT8: file size 69% smaller than the ONNX FP32 file, however accuracy was about a 1/10th lower (0.169 to 0.153) and speed was about 12% slower (10.9ms to 12.2ms), which was surprising. INT8 speedups depend on the hardware, worth re-testing on target hardware.
 
