@@ -9,7 +9,7 @@
 - Accessed: 2026-11-10
 - Local file: `data/raw/woodstock-drone-preview.mp4` (ignored by Git)
 - SHA-256: `2aa5e705252cde67eaaf747ed0b5ff326798251c1fd2c076c863b767ef4fc51b`
-- Purpose: pretrained visual smoke test only, separate from VisDrone training and evaluation.
+- Purpose: visual smoke tests and a JPEG-frame versus detection-message payload bandwidth illustration, separate from VisDrone training and accuracy evaluation.
 
 The download is the creator's web preview, not the full-resolution original. Use the local file's decoded dimensions and frame rate when describing it.
 

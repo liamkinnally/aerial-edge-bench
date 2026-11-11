@@ -1,89 +1,94 @@
-# Aerial edge bench
+# Aerial edge benchmark
 
-Experiments on the tradeoffs between aerial object detection, model size, CPU inference, and sending detections instead of video.
+**ONNX FP32 at 960 × 960 achieved higher accuracy with similar mean prediction latency to PyTorch FP32 at 640 × 640 on the Apple M4 Pro CPU: 22.2 ms versus 22.9 ms.** VisDrone validation mAP50–95 was 0.213 versus 0.169. This is an observed comparison on this machine, not a test of statistical equivalence.
 
-## Current scope
+![Stock COCO model on the left and VisDrone fine-tuned model on the right, on the same saved drone frame.](docs/assets/before-after.png)
 
-The initial setup runs a pretrained YOLO26 nano detector on a local drone video and saves an annotated copy. The MPS fine-tuning pilot and short VisDrone training run are also complete, with weights and native validation outputs retained locally under `results/phase1-pilot/` and `results/phase1-ten-epochs/`. A CPU timing command measures repeated predictions on one image. Quantization, export, and bandwidth analysis have not run.
+The left panel uses the stock model; the right uses the final VisDrone checkpoint. This is a qualitative illustration on the same [source frame](docs/assets/source-frame.jpg), separate from validation. COCO and VisDrone have different class vocabularies, and additional boxes alone do not prove better accuracy. Footage: Jordan Koschei / ConnectHV, CC0; provenance is in [data/SOURCES.md](data/SOURCES.md).
 
-The pretrained model uses COCO classes. Detection errors on small aerial objects are expected; this demo does not establish VisDrone accuracy or performance on a drone computer. The later CPU experiments will use a laptop CPU as a stand-in.
+[Measured results](docs/measurements/benchmarks.csv) · [Method and bandwidth data](docs/measurements/summary.json) · [Decisions](DECISIONS.md)
 
-## Run the demo
+## What this is
 
-Install [uv](https://docs.astral.sh/uv/), then run these commands from the repository root. The Python version is in `.python-version`; `uv.lock` pins the complete dependency environment.
+A laptop experiment on aerial object detection: fine-tune a small detector, compare PyTorch and ONNX execution, quantize the ONNX model, and measure the payload needed to send detection messages instead of images. The laptop CPU is a stand-in for comparing options; target-device performance has not been measured.
 
-```sh
-export UV_CACHE_DIR="$PWD/.cache/uv"
-uv sync --locked
-mkdir -p data/raw
-curl -fL --retry 2 \
-  'https://media.connecthv.com/preview/Flying%20through%20downtown%20Woodstock.mp4' \
-  -o data/raw/woodstock-drone-preview.mp4
-uv run --locked python scripts/predict.py \
-  --source data/raw/woodstock-drone-preview.mp4
-```
+All models use the same YOLO26 nano checkpoint, fine-tuned on VisDrone for 50 epochs at image size 640, batch 16 and seed 0. Training used MPS; validation and timing used the Apple M4 Pro CPU. The 960 rows change inference size only.
 
-The first prediction downloads the official pretrained weights into `models/`. The annotated video is saved under `results/phase0/`; repeat runs receive a new directory. These files stay out of Git. The wrapper exposes the device, thread count, image size, and confidence threshold through `--help`. Its library console timings are diagnostic output, not benchmark results.
+## Results
 
-After downloading the weights, run the checks with `uv run --locked python -m unittest discover -s tests -v`. They cover prediction output, CPU thread configuration, epoch records, and failure metadata.
+Accuracy uses the full VisDrone validation split (548 images). Timing uses 100 repeated predictions of one validation image after 10 warm-up calls, with 8 model intra-op threads on the Apple M4 Pro CPU. The timed interval includes preprocessing, inference, postprocessing and the common configuration/shape checks; it excludes image-file loading, warm-up and console logging.
 
-## Fine-tuning
+| Format | Actual input H × W | mAP50–95 | mAP50 | Pedestrian AP50–95 | Mean ms (Apple M4 Pro CPU) | p95 ms (Apple M4 Pro CPU) | File MB |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| PyTorch FP32 | 640 × 640 | 0.169 | 0.308 | 0.137 | 22.9 | 24.6 | 5.444 |
+| ONNX FP32 | 640 × 640 | 0.169 | 0.308 | 0.137 | 10.9 | 11.6 | 9.861 |
+| ONNX INT8 | 640 × 640 | 0.153 | 0.287 | 0.119 | 12.2 | 13.2 | 3.045 |
+| PyTorch FP32 | 960 × 960 | 0.213 | 0.375 | 0.199 | 38.5 | 39.1 | 5.444 |
+| ONNX FP32 | 960 × 960 | 0.213 | 0.375 | 0.199 | 22.2 | 25.4 | 10.071 |
+| ONNX INT8 | 960 × 960 | 0.194 | 0.348 | 0.171 | 23.0 | 23.9 | 3.255 |
 
-Training requires MPS and stops if it is unavailable. Run a pilot from the repository root, using a new output directory:
+AP values are fractions; higher is better. Latency is the full prediction call on the Apple M4 Pro CPU; lower is better. File sizes use decimal MB. Actual input tensors are identical across formats within each input-size group. Shape guards stop a run if those inputs differ.
 
-```sh
-uv run --locked python scripts/train.py --epochs 1 --output results/training-pilot
-```
+At input size 640, INT8 reduced the ONNX file size by 69.1% relative to ONNX FP32, while mAP50–95 fell from 0.169 to 0.153. INT8 did not reduce mean latency on the Apple M4 Pro CPU in either input-size group.
 
-The installed `VisDrone.yaml` downloads and converts the dataset under the ignored `datasets/` directory when needed. Each invocation starts from the original pretrained weights. Check the pilot's measured time and memory before choosing the longer run.
+The PyTorch checkpoint is stored differently from an ONNX graph. The FP32 label describes its execution precision, so its file size is not an equal-format compression baseline. INT8 uses quantized weighted operations with float input/output and some remaining float operations.
 
-The longer run uses an explicit batch size and a new output directory:
+## Speed versus accuracy
 
-```sh
-uv run --locked python scripts/train.py --epochs 50 --batch 16 --output results/phase1-fifty-epochs
-```
+![Mean full-call latency on the Apple M4 Pro CPU versus VisDrone validation mAP50–95, with every format and input size labelled.](docs/assets/speed-vs-accuracy.png)
 
-If the library attempts to reduce the batch after a memory failure, the wrapper stops and records the attempted change. Preserve that failed directory before starting a fresh run with the agreed smaller batch in another directory.
+The useful comparison is ONNX FP32 at the larger input size against PyTorch FP32 at the smaller input size. Mean latency is similar on the Apple M4 Pro CPU, while the larger-input result has higher validation accuracy. This does not establish equal tail latency or performance on another processor.
 
-The training directory contains `weights/best.pt`, `weights/last.pt`, the native `results.csv`, per-epoch validation JSON, and separate final-best aggregate and per-class validation JSON. `run-metadata.json` records the seed, device, package versions, Git revision, and source hashes. `epoch-records.json` includes validation and checkpoint saving in each epoch's wall time; it labels sampled MPS memory separately from process peak resident memory.
+## File size versus accuracy
 
-These are native Ultralytics validation results on converted VisDrone labels. They are not official challenge-toolkit scores. A fixed seed does not guarantee identical MPS runs because the installed backend warns about a nondeterministic operation.
+![Serialized model size in decimal MB versus VisDrone validation mAP50–95, with every format and input size labelled.](docs/assets/file-size-vs-accuracy.png)
 
-## CPU timing
+Compare ONNX INT8 with ONNX FP32 to assess quantization's size tradeoff. The smaller files retained much of the measured accuracy, but they did not improve mean latency on the Apple M4 Pro CPU in this experiment.
 
-Run from the repository root while other compute work is idle:
+## Bandwidth comparison
 
-```sh
-uv run --locked python scripts/benchmark.py \
-  --model results/phase1-ten-epochs/weights/best.pt \
-  --image datasets/VisDrone/images/val/0000001_03999_d_0000007.jpg \
-  --runs 100 --csv results/benchmarks.csv
-```
+The same fine-tuned PyTorch model processed 353 frames from a 640 × 1138 preview clip at its recorded rate of 24 frames/s. The model ran on the Apple M4 Pro CPU. JPEG encoding used the OpenCV default quality of 95.
 
-One invocation appends one CSV row. Raw sorted samples, model and image hashes, predictor settings, and source metadata are saved under `results/benchmark-runs/`. Model size uses decimal MB; image size is the configured target, and rectangular padding may use a smaller tensor. The thread-count column records actual PyTorch intra-op threads after predictor setup.
+| Payload | Average bytes/frame | Average kB/s | Baseline ÷ detection payload |
+|---|---:|---:|---:|
+| Detection messages | 166.5 | 4.0 | — |
+| Average MP4 file bytes per second | — | 63.3 | 15.8× |
+| JPEG-frame payload bandwidth | 219896.0 | 5,277.5 | 1320.8× |
 
-Liam's timing loop measures the complete CPU prediction call, including preprocessing and postprocessing. Console logging is disabled; file loading and warm-up are outside the measurement. Its p95 convention is the sorted sample at index `int(0.95 * N)`. FPS is the reciprocal of mean call latency, not measured video-pipeline throughput. Repeating one image does not establish representative latency across the validation set. Superseded measurements remain in the CSV with their status and reason.
+Rates use decimal kB/s. The MP4 baseline is the whole clip file size divided by decoded-frame duration, including container contents. The JPEG baseline encodes each frame independently. The detection payload is the script's JSON list of classes, confidence scores and pixel-coordinate boxes, including an empty list when nothing is detected.
 
-## Visual comparison
+These are two named baselines for one clip, not bounds on a deployed link. They exclude transport overhead and are not measured network traffic. The frame rate scales payload size; it is not a measurement of processing throughput.
 
-Use the same saved source frame for both models:
+There were 78 empty detection messages among 353 frames; the largest message was 553 bytes. A small message can reflect missed objects. Read the payload comparison together with the detection accuracy results.
 
-```sh
-uv run --locked python scripts/compare.py \
-  --before models/yolo26n.pt \
-  --after results/phase1-ten-epochs/weights/best.pt \
-  --image results/phase0-baseline/source-frame-000176.jpg \
-  --output results/before-after
-```
+The [saved summary](docs/measurements/summary.json) contains the underlying values. The MP4 comparison was calculated from the original measurement without rerunning inference.
 
-The output directory must be new. It receives a side-by-side PNG, native prediction JSON for each model, and shared settings and provenance. This is a qualitative illustration; COCO and VisDrone use different class vocabularies, and additional boxes do not by themselves establish higher accuracy.
+## Limitations
 
-## Data and licensing
+- No target drone computer or radio link was tested. Heat, power, memory under sustained inference and deployment latency remain unmeasured.
+- The validation metrics come from Ultralytics on converted VisDrone labels, rather than the official challenge evaluation toolkit. They do not measure accuracy on the separate demo clip.
+- Timing repeats one image on a quiet laptop. It does not establish video-pipeline throughput or representative latency across the validation set. The p95 follows the supplied loop's sorted-sample indexing convention; it is not a worst-case guarantee.
+- OpenCV's GCD backend did not honor the requested positive thread limit. Its reported setting was consistent across the matrix; the model thread count is not a total-process thread limit.
+- The saved detection head uses external non-maximum suppression. Exports and measurements preserve that mode across formats.
+- Training and inference at a larger image size are different experiments. Only inference size changed here. A fixed training seed also does not guarantee identical MPS training results.
+- The historical timing comparison changed the checkpoint and measurement wrapper as well as input shape, so it does not isolate the cost of padding.
 
-The smoke-test clip is [Flying through downtown Woodstock](https://connecthv.com/drone-footage/flying-through-downtown-woodstock), created by Jordan Koschei and published by ConnectHV. Its [drone footage library](https://connecthv.com/drone-footage) releases the footage under CC0. The command uses the site's preview MP4. See [data/SOURCES.md](data/SOURCES.md) for provenance and checksum. This clip is separate from VisDrone and is not evaluation data.
+Next experiments include a rerun in YOLO26's NMS-free mode, alongside the follow-ups in [DECISIONS.md](DECISIONS.md): training at the larger size, trying a larger model, testing the intended runtime on target hardware, and measuring the actual camera and link. Those are proposed follow-ups.
 
-Fine-tuning uses [VisDrone](https://docs.ultralytics.com/datasets/detect/visdrone); its download sources are recorded in `data/SOURCES.md`, with exact sizes and checksums in `results/phase1-setup/dataset-manifest.json`. Ultralytics provides [AGPL and Enterprise licensing options](https://www.ultralytics.com/license); a proprietary deployment needs a separate licensing assessment. No dataset or model weights are included in this repository.
+[How to reproduce](docs/REPRODUCE.md)
 
-## Manual work
+## Who wrote what
 
-The supplied handwritten timing loop is in `scripts/timing.py`, with its logic and variable names preserved. The bandwidth calculation in `scripts/bandwidth.py` and `DECISIONS.md` remain placeholders for Liam to write by hand. Measured values in this README must come from the results CSV.
+I wrote the timing loop with a proposed skeleton and review, the original bandwidth math, and the decisions log. Claude helped with planning and supplied the bandwidth frame loop and message format.
+
+Codex built the wrappers, result recording, MP4 calculation, training/export/validation scripts, tests, charts and README. I approved the corrections to the decisions log.
+
+## Licensing
+
+This repository's code is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0); see [LICENSE](LICENSE).
+
+Ultralytics is also distributed under [AGPL-3.0](https://github.com/ultralytics/ultralytics/blob/main/LICENSE) and offers a separate [Enterprise License](https://www.ultralytics.com/license). The repository's code license does not change the separate dataset and footage terms below.
+
+VisDrone is a research dataset. As recorded in [data/SOURCES.md](data/SOURCES.md), the linked upstream README did not include a standalone license grant. Dataset images, annotations and model weights are not included in this repository. Review the upstream terms before reuse or redistribution.
+
+The separate ConnectHV demo footage is CC0, as documented in [data/SOURCES.md](data/SOURCES.md). That statement does not apply to VisDrone.
