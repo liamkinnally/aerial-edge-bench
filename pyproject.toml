@@ -3,7 +3,12 @@ name = "aerial-edge-bench"
 version = "0.1.0"
 description = "Aerial object detection and CPU deployment experiments"
 requires-python = ">=3.12,<3.13"
-dependencies = ["ultralytics==8.4.209"]
+dependencies = [
+    "onnx==1.23.2",
+    "onnxruntime==1.31.1",
+    "onnxslim==0.1.99",
+    "ultralytics==8.4.209",
+]
 
 [tool.uv]
 package = false
