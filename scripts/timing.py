@@ -12,13 +12,13 @@ def measure_latency(model_path, image_path, run_count):
 
     #warm up
     for _ in range(10):
-        model(image, device = "cpu")
+        model(image, device = "cpu", verbose=False)
 
     times = []
 
     for _ in range(run_count):
         start = time.perf_counter()
-        model(image, device = "cpu")
+        model(image, device = "cpu", verbose=False)
         elapsed_ms = (time.perf_counter()-start) * 1000
         times.append(elapsed_ms)
 

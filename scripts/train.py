@@ -16,7 +16,8 @@ from training_records import EpochRecorder
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--epochs", type=int, choices=(1, 10), required=True)
+    parser.add_argument("--epochs", type=int, choices=(1, 10, 50), required=True)
+    parser.add_argument("--batch", type=int, choices=(8, 16), default=8)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
@@ -36,9 +37,9 @@ def main():
     weights = root / "models/yolo26n.pt"
     configuration = {
         "data": "VisDrone.yaml", "epochs": args.epochs, "imgsz": 640,
-        "device": "mps", "batch": 8, "workers": 0, "cache": False,
+        "device": "mps", "batch": args.batch, "workers": 0, "cache": False,
         "seed": 0, "deterministic": True, "amp": False, "close_mosaic": 0,
-        "val": True, "save": True, "plots": True, "pretrained": True,
+        "val": True, "save": True, "plots": True, "pretrained": True, "resume": False,
         "project": str(output.parent), "name": output.name, "exist_ok": True,
     }
     metadata = {
@@ -61,7 +62,7 @@ def main():
         },
         "initial_weights_sha256": hashlib.sha256(weights.read_bytes()).hexdigest(),
         "dataset_manifest": "results/phase1-setup/dataset-manifest.json",
-        "continuation_policy": "Each invocation starts from the same pretrained weights; pilot is separate from ten-epoch run.",
+        "continuation_policy": "Each invocation starts fresh from the original pretrained weights. Memory fallback requires a separate invocation and new output directory.",
     }
     manifest = output / "run-metadata.json"
     manifest.write_text(json.dumps(metadata, indent=2) + "\n")
@@ -73,9 +74,31 @@ def main():
             "mps_driver_bytes": torch.mps.driver_allocated_memory(),
         },
     )
+
+    def check_batch(trainer):
+        # Ultralytics can retry an incomplete first epoch with a smaller batch.
+        # Stop before restarting the recorder or training at an unrecorded size.
+        observed = trainer.train_loader.batch_size
+        trainer_batch = trainer.batch_size
+        if observed != args.batch or trainer_batch != args.batch:
+            retries = getattr(trainer, "_oom_retries", 0)
+            metadata["batch_change"] = {
+                "requested_batch": args.batch,
+                "observed_batch": observed,
+                "trainer_batch": trainer_batch,
+                "epoch": trainer.epoch + 1,
+                "oom_retries": retries,
+            }
+            cause = "after backend memory recovery" if retries else "unexpectedly"
+            raise RuntimeError(
+                f"Batch changed from {args.batch} to loader={observed}, trainer={trainer_batch} {cause}; "
+                "stopping this run. Use a separate fresh run for an authorized memory fallback."
+            )
+
     started = time.perf_counter()
     try:
         model = YOLO(str(weights))
+        model.add_callback("on_train_epoch_start", check_batch)
         model.add_callback("on_train_epoch_start", recorder.on_epoch_start)
         model.add_callback("on_fit_epoch_end", recorder.on_fit_epoch_end)
         model.train(**configuration)
@@ -85,6 +108,7 @@ def main():
         metadata["actual_training_device"] = str(model.trainer.device)
         metadata["actual_validation_device"] = str(model.trainer.validator.device)
         metadata["actual_torch_threads"] = torch.get_num_threads()
+        metadata["actual_training_batch"] = model.trainer.train_loader.batch_size
         metadata["saved_weights"] = {
             path.name: {"bytes": path.stat().st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
             for path in (model.trainer.best, model.trainer.last)

@@ -37,6 +37,14 @@ uv run --locked python scripts/train.py --epochs 1 --output results/training-pil
 
 The installed `VisDrone.yaml` downloads and converts the dataset under the ignored `datasets/` directory when needed. Each invocation starts from the original pretrained weights. Check the pilot's measured time and memory before choosing the longer run.
 
+The longer run uses an explicit batch size and a new output directory:
+
+```sh
+uv run --locked python scripts/train.py --epochs 50 --batch 16 --output results/phase1-fifty-epochs
+```
+
+If the library attempts to reduce the batch after a memory failure, the wrapper stops and records the attempted change. Preserve that failed directory before starting a fresh run with the agreed smaller batch in another directory.
+
 The training directory contains `weights/best.pt`, `weights/last.pt`, the native `results.csv`, per-epoch validation JSON, and separate final-best aggregate and per-class validation JSON. `run-metadata.json` records the seed, device, package versions, Git revision, and source hashes. `epoch-records.json` includes validation and checkpoint saving in each epoch's wall time; it labels sampled MPS memory separately from process peak resident memory.
 
 These are native Ultralytics validation results on converted VisDrone labels. They are not official challenge-toolkit scores. A fixed seed does not guarantee identical MPS runs because the installed backend warns about a nondeterministic operation.
@@ -54,7 +62,21 @@ uv run --locked python scripts/benchmark.py \
 
 One invocation appends one CSV row. Raw sorted samples, model and image hashes, predictor settings, and source metadata are saved under `results/benchmark-runs/`. Model size uses decimal MB; image size is the configured target, and rectangular padding may use a smaller tensor. The thread-count column records actual PyTorch intra-op threads after predictor setup.
 
-Liam's timing loop measures the complete CPU prediction call, including preprocessing, postprocessing, and default console logging. File loading and warm-up are outside the measurement. Its p95 convention is the sorted sample at index `int(0.95 * N)`. FPS is the reciprocal of mean call latency, not measured video-pipeline throughput. Repeating one image does not establish representative latency across the validation set.
+Liam's timing loop measures the complete CPU prediction call, including preprocessing and postprocessing. Console logging is disabled; file loading and warm-up are outside the measurement. Its p95 convention is the sorted sample at index `int(0.95 * N)`. FPS is the reciprocal of mean call latency, not measured video-pipeline throughput. Repeating one image does not establish representative latency across the validation set. Superseded measurements remain in the CSV with their status and reason.
+
+## Visual comparison
+
+Use the same saved source frame for both models:
+
+```sh
+uv run --locked python scripts/compare.py \
+  --before models/yolo26n.pt \
+  --after results/phase1-ten-epochs/weights/best.pt \
+  --image results/phase0-baseline/source-frame-000176.jpg \
+  --output results/before-after
+```
+
+The output directory must be new. It receives a side-by-side PNG, native prediction JSON for each model, and shared settings and provenance. This is a qualitative illustration; COCO and VisDrone use different class vocabularies, and additional boxes do not by themselves establish higher accuracy.
 
 ## Data and licensing
 

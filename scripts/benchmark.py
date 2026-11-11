@@ -64,8 +64,10 @@ def main():
         "image_path": str(args.image),
         "run_count": args.runs,
         "format": "pytorch_fp16" if model.predictor.model.fp16 else "pytorch_fp32",
-        "timing_scope": "single-image YOLO predict including logging",
+        "timing_scope": "single-image YOLO predict; logging excluded",
         "p95_method": "sorted samples at int(0.95 * N)",
+        "status": "active",
+        "superseded_reason": "",
     }
     record = {
         "started_at_utc": started_at,
@@ -90,7 +92,7 @@ def main():
         },
         "limitations": [
             "Repeated use of one image; not a representative validation-set latency benchmark.",
-            "Includes preprocessing, inference, postprocessing and default console logging; excludes file loading and warm-up.",
+            "Includes preprocessing, inference and postprocessing; excludes console logging, file loading and warm-up.",
             "image_size is the configured target; rectangular padding can use a smaller tensor.",
             "FPS is the reciprocal of mean call latency, not measured video-pipeline throughput.",
         ],

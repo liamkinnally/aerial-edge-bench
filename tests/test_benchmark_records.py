@@ -3,7 +3,9 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from scripts.benchmark_records import CSV_FIELDS, append_result, validate_csv
+from scripts.benchmark_records import (
+    CSV_FIELDS, append_result, migrate_legacy_csv, supersede_result, validate_csv,
+)
 
 
 class BenchmarkRecordsTests(unittest.TestCase):
@@ -64,6 +66,71 @@ class BenchmarkRecordsTests(unittest.TestCase):
                 records = list(csv.reader(handle))
             self.assertEqual(records[0], list(CSV_FIELDS))
             self.assertEqual(len(records), 2)
+
+    def test_legacy_migration_preserves_cells_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.csv"
+            legacy_fields = list(CSV_FIELDS[:-2])
+            cells = [f"original-{field}" for field in legacy_fields]
+            cells[0] = "16.6863196156919000"
+            cells[legacy_fields.index("hardware")] = 'CPU, "quoted"'
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows([legacy_fields, cells])
+            migrate_legacy_csv(path)
+            with path.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.reader(handle))
+            self.assertEqual(rows, [list(CSV_FIELDS), cells + ["active", ""]])
+            migrated = path.read_bytes()
+            migrate_legacy_csv(path)
+            self.assertEqual(path.read_bytes(), migrated)
+
+    def test_bad_legacy_header_or_row_width_leaves_bytes_unchanged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.csv"
+            for rows in (
+                [["unexpected", "header"], ["keep", "this"]],
+                [list(CSV_FIELDS[:-2]), ["short-row"]],
+            ):
+                with self.subTest(rows=rows):
+                    with path.open("w", newline="", encoding="utf-8") as handle:
+                        csv.writer(handle).writerows(rows)
+                    original = path.read_bytes()
+                    with self.assertRaises(ValueError):
+                        migrate_legacy_csv(path)
+                    self.assertEqual(path.read_bytes(), original)
+
+    def test_supersede_updates_only_selected_row(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.csv"
+            first = dict.fromkeys(CSV_FIELDS, "original")
+            first.update(status="active", superseded_reason="")
+            second = {**first, "mean_ms": "new-value"}
+            append_result(path, first)
+            append_result(path, second)
+            supersede_result(path, 0, 'Logging included; replaced by "quiet" run')
+            with path.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(rows, [
+                {**first, "status": "superseded", "superseded_reason": 'Logging included; replaced by "quiet" run'},
+                second,
+            ])
+            original = path.read_bytes()
+            with self.assertRaises(ValueError):
+                supersede_result(path, 0, "Another reason")
+            self.assertEqual(path.read_bytes(), original)
+
+    def test_invalid_supersede_request_leaves_bytes_unchanged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.csv"
+            row = dict.fromkeys(CSV_FIELDS, "original")
+            row.update(status="active", superseded_reason="")
+            append_result(path, row)
+            original = path.read_bytes()
+            for index, reason in ((-1, "reason"), (1, "reason"), (0, ""), (0, "   ")):
+                with self.subTest(index=index, reason=reason):
+                    with self.assertRaises(ValueError):
+                        supersede_result(path, index, reason)
+                    self.assertEqual(path.read_bytes(), original)
 
 
 if __name__ == "__main__":
