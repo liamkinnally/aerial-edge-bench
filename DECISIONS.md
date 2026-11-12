@@ -1,25 +1,47 @@
-smallest model because hardware limitations both personal and for small drones. trained on drone photos because those are the types of photos it will see in use. stock model found next to nothing in drone clip while fine-tuned found more.
+# Decisions and takeaways
 
-timed on CPU to compare PyTorch, ONNX, and INT8 on the hardware I have. some drones would use an NVIDIA computer but not the kind that I have access to. my Mac's CPU is a stand-in, and I haven't tested real drone hardware.
+These are the choices I made while working through the aerial detection benchmark, what the results showed, and what I would test next. The measurements are from my Apple M4 Pro, not drone hardware.
 
-moved image loading out of timed loop because real drone's camera hands frames straight into memory. timing file read would be accounting for a step that isn't present in real system. would make the model look slower than it would be in use. resizing image stayed in loop because real drone would have to do that each frame.
+## Model and training
 
-turned off logging because isn't part of real use. the average was the same to one decimal place. the p95 dropped slightly, which could be noise.
+I started with the nano model because compute and power are limited, both on my laptop and on smaller drones. I fine-tuned it on VisDrone because aerial images are closer to the view I wanted to test than ordinary ground-level photos. On the demo frame, the fine-tuned model found more objects than the stock COCO model. That comparison is visual only, since the models use different classes.
 
-first 10 epochs were cheap test for pipeline. separate 50 epochs after first 10 were for actually training. scores were about a fifth higher after training (mAP50 0.253 to 0.308) than the 10 epoch run. stopped at 50 because that's just what fit in an evening. didn't test whether more than 50 would be better.
+I used the first 10 epochs to make sure the training pipeline worked, then ran a separate 50-epoch training experiment. Validation mAP50 increased from 0.253 to 0.308. I stopped at 50 because it fit the time I had, not because I had established that training had converged. More training could help, but I haven't tested it.
 
-PyTorch time changed from 16.7ms to 22.9ms on the Apple M4 Pro CPU. the first measurement used 384 x 640 pixels and the later measurement used 640 x 640 pixels. the input size was one difference. the weights and the measurement wrapper also changed, so I can't say how much each contributed. rows of the same size use identical input shapes, which makes the comparison between formats fair.
+## Measuring inference
 
-My results use the mode with the extra cleanup step, because that's what training defaulted to. I didn't test the NMS-free mode, which might be faster.
+I compared PyTorch FP32, ONNX FP32, and ONNX INT8 on the CPU I had available. A drone with an NVIDIA computer could behave differently, so I treated the Mac as a way to compare configurations, not as a stand-in for actual deployment performance.
 
-shrinking in INT8: file size 69% smaller than the ONNX FP32 file, however accuracy was about a 1/10th lower (0.169 to 0.153) and speed was about 12% slower (10.9ms to 12.2ms), which was surprising. INT8 speedups depend on the hardware, worth re-testing on target hardware.
+I kept image loading outside the timed loop because a camera pipeline would already have frames in memory. I kept resizing and the rest of the prediction call inside the timer because that work still has to happen for each frame. I also disabled console logging. Mean latency stayed the same to one decimal place; p95 changed slightly, but that could just be noise.
 
-bigger image size (640 to 960) overall increased accuracy about a quarter (0.169 to 0.213). pedestrian accuracy went up almost 50% (0.137 to 0.199). time was about double (10.9ms to 22.2ms). ONNX at 960 takes about the same time as original PyTorch model at 640 (22.2ms against 22.9ms) and is about a quarter more accurate, so the speed gained from exporting paid for the larger image. model was trained at 640 and only tested at 960, so training at 960 might do better, but I didn't test this.
+One earlier PyTorch measurement was 16.7 ms with a 384 × 640 input. The later measurement was 22.9 ms with a 640 × 640 input. The checkpoint and measurement wrapper changed too, so I can't isolate how much of the difference came from image shape. For the final comparison, the configurations within each input-size group used matching actual input shapes.
 
-I compared detection messages against two methods of sending video. detections were 4.0kB/s. MP4 file 63.3kB/s and JPEG per frame 5,278 kB/s. neither 16x nor 1321x are the exact savings to assume a real drone would get, as size depends on the video format. I didn't measure a radio link and I don't know what video format a real drone might use. these are comparisons between every frame as its own JPEG picture and the clip's own compressed MP4 file. 78 of the 353 frames produced an empty message because the model found nothing in them. a small message can mean the model missed things, so less data isn't necessarily good. has to be read alongside accuracy scoring.
+The saved detection setup uses external non-maximum suppression (NMS). I kept that mode consistent across exports and measurements. I haven't tested the NMS-free mode yet, and it could change the speed results.
 
-I wrote the timing loop from a proposed skeleton with review and comparison math for the bandwidth script. Claude wrote the frame loop and message format for the bandwidth script. Codex wrote the wrapper, the result recording, and the MP4 calculation. everything else was written by Codex (training scripts, tests, and results files) following a plan I created with Claude. these measurement decisions were either made by myself or were things that I understood with help through Claude and agreed with.
+## What the results showed
 
-what surprised me was that shrinking the model worked. the file got 69% smaller than the ONNX FP32 file and still kept 9/10ths of its accuracy. I was also surprised by the INT8 rows coming out slower, when the purpose for that shrinking was speed. so, shrinking cost less accuracy than I expected, and gave less speed than I expected.
+**INT8 was smaller, but not faster on this CPU.** At 640, quantization reduced the ONNX file size by about 69%, from 9.861 MB to 3.045 MB. Validation mAP50–95 fell from 0.169 to 0.153, and mean latency rose from 10.9 ms to 12.2 ms. I expected a speed improvement, so this was the most surprising result. Smaller model files don't automatically mean faster inference; the runtime and hardware matter.
 
-next I would train at 960, not only test at it. on real device hardware I'd try the next size up from nano and see what the extra accuracy costs in speed. I'd perform much more training than 50 epochs, likely until the scores stop improving. I'd use TensorRT for shrinking for NVIDIA chips, and INT8 on the actual device. I would also measure a real link with the video format the drone actually uses, speed on the real device, heat and power over time, memory while running, and accuracy on the objects that matter in context. my dataset would also use footage from the real camera.
+**The larger input improved detection accuracy, at a latency cost.** Moving ONNX FP32 inference from 640 to 960 raised mAP50–95 from 0.169 to 0.213. Pedestrian AP50–95 rose from 0.137 to 0.199. Mean latency increased from 10.9 ms to 22.2 ms. The interesting comparison was ONNX FP32 at 960 against PyTorch FP32 at 640: 22.2 ms versus 22.9 ms, with higher validation accuracy for ONNX at 960. That's an observed comparison on this machine, not proof the two runtimes have equivalent latency.
+
+I trained at 640 and only changed the inference size for the 960 tests. Training at 960 is a separate experiment and might produce different results.
+
+## Detection messages versus video
+
+I compared the size of JSON detection messages against two ways of representing the same 353-frame clip: its compressed MP4 file and separately encoded JPEG frames. At the clip's recorded 24 frames/s, detection messages averaged 4.0 kB/s, compared with 63.3 kB/s for the MP4 file and 5,277.5 kB/s for JPEG frames.
+
+Those are payload comparisons, not measured savings over a radio link. The ratios depend heavily on how the video is encoded, and I haven't tested a real camera or link. Also, 78 of the 353 frames produced empty detection messages. That might mean there were no detections, but it could also mean the model missed objects. Smaller messages aren't automatically better if useful information is lost.
+
+## What I would test next
+
+I'd first repeat the latency measurements across different images rather than timing one frame over and over. I'd also evaluate with the official VisDrone toolkit so the accuracy numbers are easier to compare with other work.
+
+After that, I'd train at 960 rather than only increasing inference size, and try a model larger than nano to see whether the accuracy gain is worth the extra latency. I'd test NMS-free inference as well.
+
+On target hardware, I'd compare the appropriate runtime and quantization options, including TensorRT on supported NVIDIA devices. I'd measure sustained latency, memory, heat, power, and actual camera-to-link behavior. I'd also want evaluation footage from the intended camera and environment, because accuracy on VisDrone doesn't tell me everything about how the model would perform there.
+
+## Development
+
+I worked out the experiment plan with Claude, wrote the timing loop from a proposed skeleton with review, and wrote the original bandwidth comparison math and this decisions log. Claude supplied the bandwidth frame loop and message format. Codex implemented the supporting training, export, validation, measurement, testing, and reporting code. The [README](README.md#development) has the contribution summary.
+
+Some decisions started as suggestions I explored with Claude; others came from results I noticed while running the experiments. I kept the choices and interpretations here because they're the part of the work I want to be able to explain and revisit.
