@@ -1,22 +1,24 @@
-# Aerial edge benchmark
+# Aerial Edge Benchmark
 
-**ONNX FP32 at 960 × 960 achieved higher accuracy with similar mean prediction latency to PyTorch FP32 at 640 × 640 on the Apple M4 Pro CPU: 22.2 ms versus 22.9 ms.** VisDrone validation mAP50–95 was 0.213 versus 0.169. This is an observed comparison on this machine, not a test of statistical equivalence.
+An aerial object-detection study comparing inference speed, accuracy, model size and detection-message payloads on an Apple M4 Pro CPU.
+
+**ONNX FP32 at 960 × 960 achieved 0.213 validation mAP50–95 at 22.2 ms mean prediction latency, compared with 0.169 at 22.9 ms for PyTorch FP32 at 640 × 640.** The larger input improved accuracy while keeping the observed mean latency close to the smaller PyTorch configuration on this machine.
+
+[Results](docs/measurements/benchmarks.csv) · [Methodology](docs/METHODOLOGY.md) · [Reproduce](docs/REPRODUCE.md) · [Decisions](DECISIONS.md)
 
 ![Stock COCO model on the left and VisDrone fine-tuned model on the right, on the same saved drone frame.](docs/assets/before-after.png)
 
-The left panel uses the stock model; the right uses the final VisDrone checkpoint. This is a qualitative illustration on the same [source frame](docs/assets/source-frame.jpg), separate from validation. COCO and VisDrone have different class vocabularies, and additional boxes alone do not prove better accuracy. Footage: Jordan Koschei / ConnectHV, CC0; provenance is in [data/SOURCES.md](data/SOURCES.md).
+Stock COCO weights (left) and the fine-tuned VisDrone checkpoint (right) on the same [source frame](docs/assets/source-frame.jpg). This is a qualitative example; the models use different class vocabularies. Footage: Jordan Koschei / ConnectHV, CC0. See [source details](data/SOURCES.md).
 
-[Measured results](docs/measurements/benchmarks.csv) · [Method and bandwidth data](docs/measurements/summary.json) · [Decisions](DECISIONS.md)
+## Experiment
 
-## What this is
+The study compares PyTorch FP32, ONNX FP32 and calibrated ONNX INT8 at two input sizes. All six configurations use the same YOLO26 nano checkpoint, fine-tuned on VisDrone for 50 epochs at image size 640, batch 16 and seed 0. Training used MPS; validation and timing used the Apple M4 Pro CPU. The 960 configurations change inference size only.
 
-A laptop experiment on aerial object detection: fine-tune a small detector, compare PyTorch and ONNX execution, quantize the ONNX model, and measure the payload needed to send detection messages instead of images. The laptop CPU is a stand-in for comparing options; target-device performance has not been measured.
-
-All models use the same YOLO26 nano checkpoint, fine-tuned on VisDrone for 50 epochs at image size 640, batch 16 and seed 0. Training used MPS; validation and timing used the Apple M4 Pro CPU. The 960 rows change inference size only.
+The experiment also compares the payload needed to send detection messages with two video baselines. The laptop provides a controlled place to compare options before testing an intended deployment device.
 
 ## Results
 
-Accuracy uses the full VisDrone validation split (548 images). Timing uses 100 repeated predictions of one validation image after 10 warm-up calls, with 8 model intra-op threads on the Apple M4 Pro CPU. The timed interval includes preprocessing, inference, postprocessing and the common configuration/shape checks; it excludes image-file loading, warm-up and console logging.
+Accuracy uses all 548 VisDrone validation images. Timing uses 100 predictions of one saved validation image after 10 warm-up calls, with 8 model intra-op threads. It includes preprocessing, inference, postprocessing and the common configuration/shape checks; image-file loading, warm-up and console logging are excluded.
 
 | Format | Actual input H × W | mAP50–95 | mAP50 | Pedestrian AP50–95 | Mean ms (Apple M4 Pro CPU) | p95 ms (Apple M4 Pro CPU) | File MB |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -27,27 +29,25 @@ Accuracy uses the full VisDrone validation split (548 images). Timing uses 100 r
 | ONNX FP32 | 960 × 960 | 0.213 | 0.375 | 0.199 | 22.2 | 25.4 | 10.071 |
 | ONNX INT8 | 960 × 960 | 0.194 | 0.348 | 0.171 | 23.0 | 23.9 | 3.255 |
 
-AP values are fractions; higher is better. Latency is the full prediction call on the Apple M4 Pro CPU; lower is better. File sizes use decimal MB. Actual input tensors are identical across formats within each input-size group. Shape guards stop a run if those inputs differ.
-
-At input size 640, INT8 reduced the ONNX file size by 69.1% relative to ONNX FP32, while mAP50–95 fell from 0.169 to 0.153. INT8 did not reduce mean latency on the Apple M4 Pro CPU in either input-size group.
-
-The PyTorch checkpoint is stored differently from an ONNX graph. The FP32 label describes its execution precision, so its file size is not an equal-format compression baseline. INT8 uses quantized weighted operations with float input/output and some remaining float operations.
+AP values are fractions; higher is better. Latency is the full prediction call; lower is better. File sizes use decimal MB. Runtime comparisons use matching input shapes within each size group, with guards that stop a run if the shapes differ.
 
 ## Speed versus accuracy
 
 ![Mean full-call latency on the Apple M4 Pro CPU versus VisDrone validation mAP50–95, with every format and input size labelled.](docs/assets/speed-vs-accuracy.png)
 
-The useful comparison is ONNX FP32 at the larger input size against PyTorch FP32 at the smaller input size. Mean latency is similar on the Apple M4 Pro CPU, while the larger-input result has higher validation accuracy. This does not establish equal tail latency or performance on another processor.
+At 640, ONNX FP32 measured 10.9 ms against PyTorch's 22.9 ms, with matching validation accuracy to the reported precision. The lower latency made room for a larger input: ONNX at 960 improved mAP50–95 from 0.169 to 0.213 while staying close to the mean latency of PyTorch at 640. These are observed timings on this CPU; the comparison does not establish statistical equivalence or equal tail latency.
 
 ## File size versus accuracy
 
 ![Serialized model size in decimal MB versus VisDrone validation mAP50–95, with every format and input size labelled.](docs/assets/file-size-vs-accuracy.png)
 
-Compare ONNX INT8 with ONNX FP32 to assess quantization's size tradeoff. The smaller files retained much of the measured accuracy, but they did not improve mean latency on the Apple M4 Pro CPU in this experiment.
+At 640, INT8 reduced the ONNX file size by 69.1%, while mAP50–95 fell from 0.169 to 0.153. INT8 was slower than ONNX FP32 in both input-size groups on this CPU. In this experiment, quantization offered a size tradeoff rather than a latency improvement.
 
-## Bandwidth comparison
+The size comparison uses the two ONNX formats. The PyTorch checkpoint has a different storage representation; see the [precision and file-size notes](docs/METHODOLOGY.md#precision-and-file-size).
 
-The same fine-tuned PyTorch model processed 353 frames from a 640 × 1138 preview clip at its recorded rate of 24 frames/s. The model ran on the Apple M4 Pro CPU. JPEG encoding used the OpenCV default quality of 95.
+## Detection-message payloads
+
+The fine-tuned PyTorch model processed 353 frames from a 640 × 1138 preview clip. Payload rates use the clip's recorded 24 frames/s. The comparison includes the original compressed MP4 and independently encoded JPEG frames at OpenCV's default quality of 95.
 
 | Payload | Average bytes/frame | Average kB/s | Baseline ÷ detection payload |
 |---|---:|---:|---:|
@@ -55,33 +55,21 @@ The same fine-tuned PyTorch model processed 353 frames from a 640 × 1138 previe
 | Average MP4 file bytes per second | — | 63.3 | 15.8× |
 | JPEG-frame payload bandwidth | 219896.0 | 5,277.5 | 1320.8× |
 
-Rates use decimal kB/s. The MP4 baseline is the whole clip file size divided by decoded-frame duration, including container contents. The JPEG baseline encodes each frame independently. The detection payload is the script's JSON list of classes, confidence scores and pixel-coordinate boxes, including an empty list when nothing is detected.
+Detection messages contain classes, confidence scores and pixel-coordinate boxes. These rates describe payload size for one clip, exclude transport overhead, and do not measure network traffic or processing throughput. There were 78 empty messages; smaller payloads can reflect missed objects. The demo clip's detection accuracy was not measured.
 
-These are two named baselines for one clip, not bounds on a deployed link. They exclude transport overhead and are not measured network traffic. The frame rate scales payload size; it is not a measurement of processing throughput.
+See the [payload methodology](docs/METHODOLOGY.md#payload-calculations) and [saved measurements](docs/measurements/summary.json) for the calculations and underlying values.
 
-There were 78 empty detection messages among 353 frames; the largest message was 553 bytes. A small message can reflect missed objects. Read the payload comparison together with the detection accuracy results.
+## Scope and next steps
 
-The [saved summary](docs/measurements/summary.json) contains the underlying values. The MP4 comparison was calculated from the original measurement without rerunning inference.
+This is a laptop benchmark. Target-device latency, sustained heat, power and memory use, and an actual camera/radio pipeline remain unmeasured. Accuracy uses Ultralytics on converted VisDrone labels; it is not an official challenge score. The repeated-image timings do not establish performance across varied scenes or a complete video pipeline.
 
-## Limitations
+The [methodology](docs/METHODOLOGY.md) records the thread behavior, NMS mode, percentile convention and other measurement details. Follow-up experiments include NMS-free inference, training at the larger image size, trying a larger model, and testing the intended runtime, camera and link on target hardware. The [decisions log](DECISIONS.md) explains the choices and follow-ups.
 
-- No target drone computer or radio link was tested. Heat, power, memory under sustained inference and deployment latency remain unmeasured.
-- The validation metrics come from Ultralytics on converted VisDrone labels, rather than the official challenge evaluation toolkit. They do not measure accuracy on the separate demo clip.
-- Timing repeats one image on a quiet laptop. It does not establish video-pipeline throughput or representative latency across the validation set. The p95 follows the supplied loop's sorted-sample indexing convention; it is not a worst-case guarantee.
-- OpenCV's GCD backend did not honor the requested positive thread limit. Its reported setting was consistent across the matrix; the model thread count is not a total-process thread limit.
-- The saved detection head uses external non-maximum suppression. Exports and measurements preserve that mode across formats.
-- Training and inference at a larger image size are different experiments. Only inference size changed here. A fixed training seed also does not guarantee identical MPS training results.
-- The historical timing comparison changed the checkpoint and measurement wrapper as well as input shape, so it does not isolate the cost of padding.
+## Development
 
-Next experiments include a rerun in YOLO26's NMS-free mode, alongside the follow-ups in [DECISIONS.md](DECISIONS.md): training at the larger size, trying a larger model, testing the intended runtime on target hardware, and measuring the actual camera and link. Those are proposed follow-ups.
+I developed the experiment plan with Claude, wrote the timing loop from a proposed skeleton with review, and wrote the original bandwidth comparison math and decisions log.
 
-[How to reproduce](docs/REPRODUCE.md)
-
-## Who wrote what
-
-I wrote the timing loop with a proposed skeleton and review, the original bandwidth math, and the decisions log. Claude helped with planning and supplied the bandwidth frame loop and message format.
-
-Codex built the wrappers, result recording, MP4 calculation, training/export/validation scripts, tests, charts and README. I approved the corrections to the decisions log.
+Claude supplied the bandwidth frame loop and message format. Codex implemented the training, export, validation and reporting pipeline, supporting wrappers, the MP4 comparison, tests, charts and documentation.
 
 ## Licensing
 
