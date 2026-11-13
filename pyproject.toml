@@ -1,7 +1,7 @@
 [project]
-name = "aerial-edge-bench"
+name = "aerial-inference-bench"
 version = "0.1.0"
-description = "Aerial object detection and CPU deployment experiments"
+description = "Aerial object detection and CPU inference benchmarks"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "onnx==1.23.2",

@@ -1,4 +1,4 @@
-# Aerial Edge Benchmark
+# Aerial Object Detection and Inference Benchmarking
 
 An aerial object-detection study comparing inference speed, accuracy, model size and detection-message payloads on an Apple M4 Pro CPU.
 

@@ -8,7 +8,7 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "aerial-edge-bench"
+name = "aerial-inference-bench"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
